@@ -4,6 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Bline Venture ERP</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -207,6 +208,22 @@ textarea.form-control{resize:vertical;min-height:80px}
 </style>
 </head>
 <body>
+
+<!-- LOADING SCREEN -->
+<div id="loading-screen" style="min-height:100vh;background:linear-gradient(135deg,#1e40af,#2563eb);display:flex;align-items:center;justify-content:center;font-family:'Nunito',sans-serif">
+  <div style="text-align:center;color:#fff">
+    <div style="font-size:48px;margin-bottom:16px">🏪</div>
+    <div style="font-size:24px;font-weight:800;margin-bottom:8px">Bline Venture ERP</div>
+    <div style="font-size:14px;opacity:0.7;margin-bottom:24px">Connecting to database...</div>
+    <div style="width:200px;height:4px;background:rgba(255,255,255,0.2);border-radius:2px;margin:0 auto;overflow:hidden">
+      <div id="loading-bar" style="height:100%;background:#fff;border-radius:2px;width:0%;transition:width 0.3s;animation:loadBar 2s ease forwards"></div>
+    </div>
+    <div id="loading-status" style="font-size:12px;opacity:0.6;margin-top:12px">Initializing...</div>
+  </div>
+</div>
+<style>
+@keyframes loadBar{0%{width:0%}50%{width:70%}100%{width:100%}}
+</style>
 
 <!-- LOGIN -->
 <div id="login-screen">
@@ -875,11 +892,57 @@ textarea.form-control{resize:vertical;min-height:80px}
 <div class="toast" id="toast"></div>
 
 <script>
-// ============ DATA ============
+// ============ SUPABASE + DATA ============
+const SUPABASE_URL = 'https://jxwfvbtlxuxcphcowjeb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_u8FauyqGY_QpyQQKKnlABQ_6Ib-J4Fb';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// In-memory cache — all reads are instant
+const MEMORY = {};
+
+// Hybrid STORE: reads from memory (fast), writes to memory + Supabase
 const STORE = {
-  get(k){try{const v=localStorage.getItem('erp_'+k);return v?JSON.parse(v):null}catch{return null}},
-  set(k,v){localStorage.setItem('erp_'+k,JSON.stringify(v))},
+  get(k){
+    return MEMORY[k] !== undefined ? MEMORY[k] : null;
+  },
+  set(k, v){
+    MEMORY[k] = v;
+    // Save to Supabase in background (non-blocking)
+    sb.from('erp_store').upsert({key: k, value: v}, {onConflict: 'key'}).then(({error}) => {
+      if(error) console.warn('Supabase save error:', k, error.message);
+    });
+    // Also save to localStorage as backup
+    try{ localStorage.setItem('erp_'+k, JSON.stringify(v)); }catch(e){}
+  }
 };
+
+// Load all data from Supabase into memory
+async function loadFromSupabase(){
+  const status = document.getElementById('loading-status');
+  try {
+    if(status) status.textContent = 'Loading your data...';
+    const {data, error} = await sb.from('erp_store').select('*');
+    if(error) throw error;
+    if(data && data.length > 0){
+      data.forEach(row => { MEMORY[row.key] = row.value; });
+      if(status) status.textContent = 'Data loaded! ✓';
+    } else {
+      if(status) status.textContent = 'Setting up for first time...';
+      // Load from localStorage backup if exists
+      const keys=['users','categories','brands','units','products','contacts','accounts','expenseCategories','sales','purchases','expenses','cheques','adjustments','counter','settings','roles','agents','data_version'];
+      keys.forEach(k=>{
+        try{const v=localStorage.getItem('erp_'+k);if(v)MEMORY[k]=JSON.parse(v);}catch(e){}
+      });
+    }
+  } catch(e){
+    console.warn('Supabase load failed, using localStorage:', e.message);
+    if(status) status.textContent = 'Using local backup...';
+    const keys=['users','categories','brands','units','products','contacts','accounts','expenseCategories','sales','purchases','expenses','cheques','adjustments','counter','settings','roles','agents','data_version'];
+    keys.forEach(k=>{
+      try{const v=localStorage.getItem('erp_'+k);if(v)MEMORY[k]=JSON.parse(v);}catch(e){}
+    });
+  }
+}
 
 function initData(){
   // Force reload sample data if version changes
@@ -1895,9 +1958,28 @@ window.nav=function(page){
 };
 
 // ============ INIT ============
-initData();
-setHeaderDate();
-setInterval(setHeaderDate,60000);
+async function startApp(){
+  // Show loading screen
+  document.getElementById('loading-screen').style.display='flex';
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('app').style.display='none';
+
+  // Load data from Supabase
+  await loadFromSupabase();
+
+  // Initialize default data
+  initData();
+
+  // Hide loading, show login
+  setTimeout(()=>{
+    document.getElementById('loading-screen').style.display='none';
+    document.getElementById('login-screen').style.display='flex';
+    setHeaderDate();
+    setInterval(setHeaderDate,60000);
+  }, 800);
+}
+
+startApp();
 </script>
 </body>
 </html>
